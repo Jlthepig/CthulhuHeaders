@@ -1,7 +1,4 @@
-//---------------------------------------------------------------------------
 // log_utils.hpp
-//
-// Copyright (C) 2026 Lost Empire Entertainment
 //
 // This is free source code, and you are welcome to redistribute it under certain conditions.
 // Read LICENSE.md for more information.
@@ -12,7 +9,7 @@
 //   - log types - info (no log type stamp), debug (skipped in release), success, warning, error
 //   - time stamp, date stamp accurate to system clock
 //   - logHook - user-defined function that allows emitting logs to another target like the crash log storage in kalawindow
-//---------------------------------------------------------------------------
+//
 
 #pragma once
 
@@ -23,6 +20,7 @@
 #include <chrono>
 #include <array>
 #include <algorithm>
+
 
 //static_cast
 #ifndef scast
@@ -236,7 +234,7 @@ namespace KalaHeaders::KalaLog
 				buffer[length++] = '-';
 				buffer[length++] = '0' + (us / 100) % 10;
 				buffer[length++] = '0' + (us / 10) % 10;
-				buffer[length++] = '0' + (us % 10);
+				buffer[length++] = '0' + (us % 100);
 				buffer[length] = '\0';
 
 				break;
@@ -339,6 +337,15 @@ namespace KalaHeaders::KalaLog
 
 			char* p = logBuffer().data();
 
+			FILE* out = (type == LogType::LOG_ERROR)
+				? stderr
+				: stdout;
+
+			//color open — LOG_INFO has an empty code (length 0) so memcpy is a no-op
+			const size_t colorLen = LogTypeColorLength[scast<size_t>(type)];
+			memcpy(p, LogTypeColor[scast<size_t>(type)], colorLen);
+			p += colorLen;
+
 			//append [ date ] [ time ]
 			if (!dateStamp.empty())
 			{
@@ -381,17 +388,17 @@ namespace KalaHeaders::KalaLog
 			memcpy(p, trimmed.data(), trimmed.size());
 			p += trimmed.size();
 
+			//color reset — skipped for LOG_INFO since we never opened a code
+			if (colorLen > 0)
+			{
+				memcpy(p, ANSI_RESET, ANSI_RESET_LEN);
+				p += ANSI_RESET_LEN;
+			}
+
 			//newline
 			*p++ = '\n';
 
-			FILE* out = (type == LogType::LOG_ERROR)
-				? stderr
-				: stdout;
-
 			const size_t length = scast<size_t>(p - logBuffer().data());
-
-			//TODO: figure out how to make it work
-			//EmitLog(string_view(logBuffer().data(), length));
 
 			fwrite(logBuffer().data(), 1, length, out);
 
@@ -420,14 +427,43 @@ namespace KalaHeaders::KalaLog
 			memcpy(logBuffer().data(), trimmed.data(), length);
 			logBuffer()[length] = '\n';
 
-			//TODO: figure out how to make it work
-			//EmitLog(string_view(logBuffer().data(), totalLength));
-
 			fwrite(logBuffer().data(), 1, totalLength, stdout);
 
 			if (flush) fflush(stdout);
 		}
-	private:		
+
+	private:
+		//---------------------------------------------------------------------
+		// ANSI color codes
+		//   VERBOSE -> dark grey   \x1b[90m
+		//   INFO    -> default     (no code, empty)
+		//   DEBUG   -> cyan        \x1b[36m
+		//   SUCCESS -> green       \x1b[32m
+		//   WARNING -> yellow      \x1b[33m
+		//   ERROR   -> bright red  \x1b[91m
+		//---------------------------------------------------------------------
+		static constexpr const char* ANSI_RESET    = "\x1b[0m";
+		static constexpr size_t      ANSI_RESET_LEN = 4;
+
+		static constexpr const char* LogTypeColor[] =
+		{
+			"\x1b[90m", //LOG_VERBOSE  dark grey
+			"",          //LOG_INFO     default (no code)
+			"\x1b[36m", //LOG_DEBUG    cyan
+			"\x1b[32m", //LOG_SUCCESS  green
+			"\x1b[33m", //LOG_WARNING  yellow
+			"\x1b[91m"  //LOG_ERROR    bright red
+		};
+		static constexpr size_t LogTypeColorLength[] =
+		{
+			7, //"\x1b[90m"
+			0, //""
+			7, //"\x1b[36m"
+			7, //"\x1b[32m"
+			7, //"\x1b[33m"
+			7  //"\x1b[91m"
+		};
+
 		static inline string TrimUTF8(string_view s)
 		{
 			size_t bytes = 0;
@@ -482,7 +518,7 @@ namespace KalaHeaders::KalaLog
 		{
 			//search existing entries
 
-			for (size_t i = 0; i < prefixSize; ++i)
+			for (size_t i = 0; i < prefixSize(); ++i)
 			{
 				const auto& e = prefixCache()[i];
 				if (e.type == type
@@ -512,15 +548,20 @@ namespace KalaHeaders::KalaLog
 			p[3 + tagLength + targetLength] = ']';
 			p[4 + tagLength + targetLength] = ' ';
 
+			size_t& size  = prefixSize();
+			size_t& clock = prefixClock();
+
 			size_t index{};
-			if (prefixSize < prefixCache().size()) index = prefixSize++;
-			else index = (prefixClock++ % prefixCache().size());
+			if (size < prefixCache().size()) index = size++;
+			else index = (clock++ % prefixCache().size());
 
 			prefixCache()[index] = { type, string(target), std::move(built) };
 			return prefixCache()[index].prefix;
 		}
 
-		//Message length + headroom for tag, date stamp, time stamp and indent
+		//Message length + headroom for tag, date stamp, time stamp, indent, and color codes
+		//Worst case: MAX_MESSAGE_LENGTH + time(20) + date(12) + MAX_INDENT_LENGTH(20)
+		//          + MAX_TAG_LENGTH(50) + brackets/spaces(~20) + color open(7) + reset(4) + newline(1)
 		static inline array<char, MAX_MESSAGE_LENGTH + 256>& logBuffer()
 		{
 			thread_local array<char, MAX_MESSAGE_LENGTH + 256> buffer{};
@@ -533,7 +574,16 @@ namespace KalaHeaders::KalaLog
 			return cache;
 		}
 
-		static inline thread_local size_t prefixSize{};  //total filled cached prefixes
-		static inline thread_local size_t prefixClock{}; //where to overwrite next once the cache is full
+		//Moved into accessor functions to avoid the thread_local static inline member pitfall
+		static inline size_t& prefixSize()
+		{
+			thread_local size_t val{};
+			return val;
+		}
+		static inline size_t& prefixClock()
+		{
+			thread_local size_t val{};
+			return val;
+		}
 	};
 }
