@@ -1,4 +1,4 @@
-[KalaHeaders source repository](https://github.com/KalaKit/KalaHeaders)
+
 
 ---
 
