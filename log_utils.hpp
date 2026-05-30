@@ -1,5 +1,6 @@
 // log_utils.hpp
 //
+// Copyright (C) 2026 Lost Empire Entertainment - original creator 
 // This is free source code, and you are welcome to redistribute it under certain conditions.
 // Read LICENSE.md for more information.
 //
